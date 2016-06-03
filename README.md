@@ -1,4 +1,4 @@
-# AutonomousRollerShutter
+# Automatic Window Roller Shutter System
 
 The following code is used to run Automatic Roller Shutter Controller. 
 From a simple purpose device it evolved into a multi functional IoT device to utilize the idle cpu time and unused ports. 
