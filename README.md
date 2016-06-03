@@ -28,3 +28,6 @@ Values should be defined in the array openClose.
 10) 2 LEDs for activity/status indications. Posting data to Thingspeak or sending data to Blynk with one LED and second onboard led displays if window is opened or closed 
 
 11) Fake "multi threading" orchestrating all processes
+
+Video of how the device is functioning in real life can be seen here:
+https://www.youtube.com/watch?v=zLUYhnjSXxM
