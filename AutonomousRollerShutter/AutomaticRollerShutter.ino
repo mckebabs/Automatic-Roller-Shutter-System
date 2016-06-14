@@ -1,25 +1,33 @@
+
+
  
 //-----Libs-----
 #define BLYNK_PRINT Serial    // Comment this out to disable prints and save space
-#include <SimpleTimer.h>
 #include <BlynkSimpleEsp8266.h>
 #include <Time.h>
 #include <TimeLib.h>
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
 #include <Servo.h>
-#include <SimpleDHT.h>
+#include <DHT.h>
+
 
 //----Functions
 
 boolean readSensor();
 
-//----scheduler----
-SimpleTimer timer;
+//---Timer last update----
+unsigned long updateTimer_time = 0;
+unsigned long timeNow_time = 0;
+unsigned long timerOpen_time = 0;
+unsigned long timerClose_time = 0;
+unsigned long testSensor_time = 0;
+unsigned long getTempHumidity_time = 0;
+unsigned long postToThingspeak_time = 0;
 
 //------Wifi-----
-char ssid[] = "Enter your WIFI SSID";  //  your network SSID (name)
-char pass[] = "Enter your Password";       // your network password
+char ssid[] = "xxxxxxxxxxx";  //  your network SSID (name)
+char pass[] = "xxxxxxxxxxx";       // your network password
 WiFiClient client;
 long rssi = WiFi.RSSI();
 
@@ -30,7 +38,7 @@ boolean stat;
 
 //----Timer-----
 boolean windowsOpen=false;
-int openClose[7][4] = { //Program time each day the Servo "Opens" and "Closes"
+int openClose[7][4] = {
   {7, 0, 9, 0},
   {7, 0, 9, 0},
   {7, 0, 9, 0},
@@ -49,12 +57,14 @@ WiFiUDP udp;
 
 int cb; //Test if time was retrieved from the server
 void timeNow();
+boolean firstTime = 0;
 unsigned long lastUpdate=0;
 unsigned long sixHours=21600;
 String timeNowIs;
+String uptime;
 
 //-------Servo---
-//Finetuned values for the my  servo position relative to the remote
+//Finetuned values for the my relative servo position to the remote
 Servo myservo; 
 int servoDefault = 150;
 int servoOpen = 170;
@@ -62,20 +72,24 @@ int servoClose = 130;
 
 //-----ThingSpeak-----
 // replace with your channel’s thingspeak API key
-String writeApiKey = "Enter your Thingspeak Write Key";
-String readApiKey = "Enter your Thingspeak Read Key";
+String writeApiKey = "xxxxxxxxxxxxxx";
+String readApiKey = "xxxxxxxxxxxxxxx";
 const char* server = "api.thingspeak.com";
 
 
 //-------Blynk-----
-char auth[] = "Enter your Blynk Code";
+char auth[] = "xxxxxxxxxxxxxxxxxxxxxxxx";
 
 //------Temperature/Humidity---------
 
-int pinDHT11 = 13;
-int dew=0;
-byte h=0;
-byte t=0;
+#define DHTPIN 13
+#define DHTTYPE DHT22
+DHT dht(DHTPIN, DHTTYPE);
+
+float h;
+float t;
+float hic;
+
 
 //---Blinker----
 int ledState = LOW;   
@@ -86,7 +100,7 @@ const int ledPin =  12;
 
 
 //------FUNCTIONS--------
-//Delay() thing is not pretty, but period is too short to complicate things. This might cause some minor glitches
+//Delay thing is not pretty, but it is to short to complicate things
 void blinker() {
      digitalWrite(ledPin, HIGH);
      delay(50);
@@ -131,7 +145,9 @@ void postToThingspeak(){
     postLine +="&field5=";
     postLine += String(h);
     postLine +="&field6=";
-    postLine += String(dew);
+    postLine += String(hic);
+    postLine +="&field7=";
+    postLine += String(millis());
     thingspeak(postLine);
     blinker();
 }
@@ -207,7 +223,13 @@ void timeUpdate() {
   }
 
 void updateTimer() {
-    if(now()-lastUpdate < sixHours){
+    if(firstTime==0){
+    while(!cb){
+    timeUpdate();
+    }
+    firstTime=1;
+    Serial.println("Time has been updated for the first time");
+    }else if(now()-lastUpdate < sixHours){
     while(!cb){
     timeUpdate();
     }
@@ -259,11 +281,10 @@ void servo(int x) {
 // Test for windows status removed, since it will make scenario more bulletproof. If the Window is already opened, it won't hurt if the button is pressed once more
 void timerOpen() { 
     String xc = dayStr(weekday());  
-    if(windowsOpen==false){
   //------------------------------------
     for (int i=0; i <= 6; i++){
       if(xc==dayN[i]){
-        if(hour() == openClose[i][0]  && minute() == openClose[i][1] && now()-lastOpenedClosed>60){
+        if(hour() == openClose[i][0]  && minute() == openClose[i][1] && millis()-lastOpenedClosed>60){
            servo(servoOpen);
            servo(servoOpen);
            Serial.println("Opened on ");
@@ -271,11 +292,10 @@ void timerOpen() {
            windowsOpen=true;
            digitalWrite(2, LOW); 
            break;
-           lastOpenedClosed = now();
+           lastOpenedClosed = millis();
           }
          }
-      }
-    }
+      } 
 }
 
 
@@ -289,14 +309,14 @@ void timerClose() {
   //------------------------------------
     for (int i=0; i <= 6; i++){
       if(xc==dayN[i]){
-        if(hour() == openClose[i][2]  && minute() == openClose[i][3] && now()-lastOpenedClosed>60){
+        if(hour() == openClose[i][2]  && minute() == openClose[i][3] && millis()-lastOpenedClosed>60){
            servo(servoClose);
            servo(servoClose);
            Serial.println("Closed on ");
            Serial.print(dayN[i]);
            windowsOpen=false;
            digitalWrite(2, HIGH); 
-           lastOpenedClosed = now();
+           lastOpenedClosed = millis();
            break;          
          }
       }
@@ -309,8 +329,31 @@ void timeNow(){
     timeNowIs += String(minute());
     timeNowIs +="-";
     timeNowIs += String(second());    
-  Serial.println(timeNowIs);
-  Serial.println();
+    Serial.println(timeNowIs);
+    Serial.println();
+    
+//---Courtesy of Ardino comunnity user Limbo
+    long days=0;
+    long hours=0;
+    long mins=0;
+    long secs=0;
+    secs = millis()/1000; //convect milliseconds to seconds
+    mins=secs/60; //convert seconds to minutes
+    hours=mins/60; //convert minutes to hours
+    days=hours/24; //convert hours to days
+    secs=secs-(mins*60); //subtract the coverted seconds to minutes in order to display 59 secs max 
+    mins=mins-(hours*60); //subtract the coverted minutes to hours in order to display 59 minutes max
+    hours=hours-(days*24); //subtract the coverted hours to days in order to display 23 hours max
+    
+    uptime = String(days);
+    uptime +="D ";
+    uptime +=String(hours);
+    uptime +="H ";
+    uptime +=String(mins);
+    uptime +="M";
+
+    Serial.println(uptime);
+    Serial.println();
 }
 
 
@@ -331,38 +374,30 @@ void printWifiStatus() {
 }
 
 
-double dewPointFast(double celsius, double humidity)
-{
-  double a = 17.271;
-  double b = 237.7;
-  double temp = (a * celsius) / (b + celsius) + log(humidity*0.01);
-  double Td = (b * temp) / (a - temp);
-  return Td;
-}
-
 
 void getTempHumidity(){
-  if (simple_dht11_read(pinDHT11, &t, &h, NULL)) {
-    Serial.print("Read DHT11 failed.");
-    return;
-  }
-   //dew point
-  dew = (dewPointFast((int)t, (int)h)); 
+
+  h = dht.readHumidity();
+  // Read temperature as Celsius (the default)
+  t = dht.readTemperature();
+  // Compute heat index in Celsius (isFahreheit = false)
+  hic = dht.computeHeatIndex(t, h, false);
+
   Serial.print("Humidity: ");
-  Serial.print((int)h);
+  Serial.print(h);
   Serial.print(" %\t");
   Serial.print("Temperature: ");
-  Serial.print((int)t);
+  Serial.print(t);
   Serial.print(" *C ");
-  Serial.print("Dew Point (*C): ");
-  Serial.println(dew); 
+  Serial.print("Heat Index (*C): ");
+  Serial.println(hic); 
 }
 
 //----Blynk functions-----
 //Buttons Open and Close 
   BLYNK_WRITE(V0)
 {
-            Serial.println("Message: Write V0");
+    Serial.println("Message: Write V0");
     servo(servoClose);
     Serial.println("Windows closed");
     windowsOpen=false;
@@ -371,7 +406,7 @@ void getTempHumidity(){
 
   BLYNK_WRITE(V1)
 {
-            Serial.println("Message: WriteV1");
+      Serial.println("Message: WriteV1");
       servo(servoOpen);
       Serial.println("Windows opened");
       windowsOpen=true;
@@ -397,9 +432,8 @@ void getTempHumidity(){
  Blynk.virtualWrite(V3, t);
  Blynk.virtualWrite(V4, h);
  Blynk.virtualWrite(V5, timeNowIs);
- Blynk.virtualWrite(V6, dew);
- int signalStrength = WiFi.RSSI()*(-1);
- Blynk.virtualWrite(V7, signalStrength);
+ //Blynk.virtualWrite(V6, hic);
+ Blynk.virtualWrite(V7, uptime);
  blinker();
 }
 
@@ -444,19 +478,55 @@ void setup(){
   pinMode(2, OUTPUT); 
   pinMode(12, OUTPUT); 
 
-//--------TaskManager-------
-  timer.setInterval(60000, updateTimer);
-  timer.setInterval(3000, timeNow);
-  timer.setInterval(30000, timerOpen);
-  timer.setInterval(30000, timerClose);
-  timer.setInterval(5000, testSensor);
-  timer.setInterval(5000, getTempHumidity);
-  timer.setInterval(20000, postToThingspeak);
+//----DHT Temp-----
+dht.begin();  
 
 }
   void loop(){     
   Blynk.run(); //Runs all Blynk activities
-  timer.run(); //"Task Manager"
+
+  if(millis()- updateTimer_time>60000){
+    updateTimer();
+    updateTimer_time = millis();
+  Serial.println("updateTimer");
+  }
+
+  if(millis() - timeNow_time >3000){
+    timeNow();
+    timeNow_time = millis();   
+      Serial.println("timeNow");
+  }
+
+  if(millis() - timerOpen_time>30000){
+    timerOpen();
+    timerOpen_time = millis(); 
+      Serial.println("timerOpen");  
+  }
+  
+  if(millis() - timerClose_time>30000){
+    timerClose();
+    timerClose_time = millis();   
+          Serial.println("timerClose");
+  }
+  
+  if(millis() - testSensor_time>5000){
+    testSensor();
+    testSensor_time = millis(); 
+          Serial.println("testSensor");  
+  }
+  
+  if(millis() - getTempHumidity_time>50000){
+    getTempHumidity();
+    getTempHumidity_time = millis();   
+          Serial.println("getTempHumidity");
+  }
+  
+  if(millis() - postToThingspeak_time>60000){
+    postToThingspeak();
+    postToThingspeak_time = millis();   
+      Serial.println("postToThingspeak");
+  }
+  yield();
 }
 
 //Known bugs- won't be fixed:
